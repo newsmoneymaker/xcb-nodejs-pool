@@ -1,6 +1,9 @@
+#include <algorithm>
 #include <cstdio>
 #include <cstring>
 #include <mutex>
+#include <thread>
+#include <vector>
 
 #include <openssl/evp.h>
 
@@ -14,20 +17,76 @@ namespace xcb_randomy {
 namespace {
 
 
-std::once_flag g_cacheOnce;
+std::once_flag g_initOnce;
 xcbrndy_randomx_cache *g_cache = nullptr;
+xcbrndy_randomx_dataset *g_dataset = nullptr;
+xcbrndy_randomx_flags g_baseFlags = XCBRNDY_RANDOMX_FLAG_DEFAULT;
 
 
-void initCacheOnce()
+// Same multi-threaded dataset-init convention as the real poolpayminer miner build
+// (src/crypto/xcb_randomy/xcb_randomy.cpp's initDatasetParallel(), itself matching
+// src/crypto/rx/RxDataset.cpp's own convention) -- split across all available CPU threads, it's a
+// one-time ~0.5-4s cost per process, not a per-hash cost.
+void initDatasetParallel(xcbrndy_randomx_dataset *dataset, xcbrndy_randomx_cache *cache, unsigned long itemCount)
+{
+    unsigned int hw = std::thread::hardware_concurrency();
+    if (hw == 0) {
+        hw = 1;
+    }
+    const unsigned int numThreads = std::min<unsigned int>(hw, 64);
+
+    if (numThreads <= 1 || itemCount < numThreads) {
+        xcbrndy_randomx_init_dataset(dataset, cache, 0, itemCount);
+        return;
+    }
+
+    std::vector<std::thread> threads;
+    threads.reserve(numThreads);
+
+    for (unsigned int i = 0; i < numThreads; ++i) {
+        const unsigned long a = (itemCount * i) / numThreads;
+        const unsigned long b = (itemCount * (i + 1)) / numThreads;
+        threads.emplace_back(xcbrndy_randomx_init_dataset, dataset, cache, a, b - a);
+    }
+
+    for (auto &t : threads) {
+        t.join();
+    }
+}
+
+
+void initOnce()
 {
     // Core Blockchain (XCB): the fixed, never-rotated RandomY dataset key, ASCII "56789" -- confirmed
     // from go-randomy/vm.go's NewRandomYVMWithKeyAndMutex(): key := []byte{53, 54, 55, 56, 57}.
     static const uint8_t key[5] = { 53, 54, 55, 56, 57 };
 
-    g_cache = xcbrndy_randomx_alloc_cache(XCBRNDY_RANDOMX_FLAG_DEFAULT);
-    if (g_cache) {
-        xcbrndy_randomx_init_cache(g_cache, key, sizeof(key));
+    // This helper is a standalone, native Linux process (no Windows/wine build exists for it) -- the
+    // real poolpayminer miner build found that enabling RANDOMX_FLAG_JIT crashes specifically under
+    // wine64 (not on real, native Linux, where it ran rock-solid for 50+ seconds and hundreds of real
+    // accepted shares), so that platform-specific caution does NOT apply here. Full get_flags() baseline
+    // (JIT + HARD_AES + ARGON2_AVX2/SSSE3) is used unconditionally.
+    g_baseFlags = xcbrndy_randomx_get_flags();
+
+    g_cache = xcbrndy_randomx_alloc_cache(g_baseFlags);
+    if (!g_cache) {
+        return;
     }
+    xcbrndy_randomx_init_cache(g_cache, key, sizeof(key));
+
+    // Always full/dataset mode: this helper hashes at roughly the same real volume as a connected miner
+    // (pool.js's onSubmit() calls hasher.hash() for EVERY real submitted share, not just occasional
+    // candidates), runs on the pool's own server (not an end-user's machine), and the dataset is cheap
+    // (~264 MiB per helper process, hasherConfig.threads of them -- see config.json) compared to every
+    // other coin's hasher here. No light-mode fallback exposed on this side.
+    xcbrndy_randomx_dataset *dataset = xcbrndy_randomx_alloc_dataset(XCBRNDY_RANDOMX_FLAG_DEFAULT);
+    if (!dataset) {
+        fprintf(stderr, "xcb_randomy: dataset allocation failed (~264 MiB) -- falling back to light/cache-only mode\n");
+        return;
+    }
+
+    initDatasetParallel(dataset, g_cache, xcbrndy_randomx_dataset_item_count());
+    g_dataset = dataset;
 }
 
 
@@ -59,12 +118,16 @@ bool sha3_512(const uint8_t *data, size_t size, uint8_t out64[64])
 
 void *createVm()
 {
-    std::call_once(g_cacheOnce, initCacheOnce);
+    std::call_once(g_initOnce, initOnce);
     if (!g_cache) {
         return nullptr;
     }
 
-    return xcbrndy_randomx_create_vm(XCBRNDY_RANDOMX_FLAG_DEFAULT, g_cache, nullptr);
+    if (g_dataset) {
+        return xcbrndy_randomx_create_vm(g_baseFlags | XCBRNDY_RANDOMX_FLAG_FULL_MEM, g_cache, g_dataset);
+    }
+
+    return xcbrndy_randomx_create_vm(g_baseFlags, g_cache, nullptr);
 }
 
 
@@ -159,7 +222,31 @@ bool selfTest()
         0x0c, 0x0a, 0x18, 0xa3, 0x25, 0x93, 0x20, 0x78, 0xdc, 0x33, 0xf7, 0xac, 0x69, 0xff, 0x17, 0xe8,
     };
 
-    return memcmp(out, expected, sizeof(out)) == 0;
+    if (memcmp(out, expected, sizeof(out)) != 0) {
+        return false;
+    }
+
+    // 3) Full/dataset mode, same key+input, on the SAME testCache -- proves the dataset-mode path
+    //    (alloc_dataset/init_dataset/create_vm-with-dataset) gives the BYTE-IDENTICAL hash as light
+    //    mode, on every real startup. See xcb-project.md.
+    xcbrndy_randomx_dataset *testDataset = xcbrndy_randomx_alloc_dataset(XCBRNDY_RANDOMX_FLAG_DEFAULT);
+    if (!testDataset) {
+        return false;
+    }
+    initDatasetParallel(testDataset, testCache, xcbrndy_randomx_dataset_item_count());
+
+    xcbrndy_randomx_vm *fullVm = xcbrndy_randomx_create_vm(XCBRNDY_RANDOMX_FLAG_FULL_MEM, testCache, testDataset);
+    if (!fullVm) {
+        return false;
+    }
+
+    uint8_t outFull[32];
+    xcbrndy_randomx_calculate_hash(fullVm, "This is a test", 14, outFull);
+    xcbrndy_randomx_destroy_vm(fullVm);
+    // Deliberately NOT calling release_dataset()/release_cache() here -- same documented, one-time,
+    // startup-only leak posture as testCache above.
+
+    return memcmp(outFull, expected, sizeof(outFull)) == 0;
 }
 
 
