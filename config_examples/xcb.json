@@ -1,0 +1,92 @@
+{
+	"coin": "xcb",
+	"coinUnits": 1000000000000000000,
+	"coinDecimalPlaces": 18,
+
+	"logging": {
+		"files": {
+			"level": "info",
+			"directory": "logs",
+			"flushInterval": 5
+		},
+		"console": {
+			"level": "info",
+			"colors": true
+		}
+	},
+
+	"poolServer": {
+		"enabled": true,
+		"corebase": "cbYOUR_POOL_WALLET_ADDRESS_HERE",
+		"ports": [
+			{"port": 6200, "tls": false, "desc": "XCB stratum"},
+			{"port": 6201, "tls": true, "desc": "XCB stratum (TLS)"}
+		],
+		"bindIp": "0.0.0.0",
+		"allowIPs": [],
+		"sslCert": "./cert.pem",
+		"sslKey": "./privkey.pem",
+		"varDiff": {
+			"startDiff": 100,
+			"minDiff": 10,
+			"maxDiff": 50000000,
+			"targetTime": 20,
+			"retargetTime": 60,
+			"variancePercent": 30,
+			"maxJump": 100
+		},
+		"jobRefresh": 1000,
+		"maxConnections": 3000,
+		"maxConnectionsPerIp": 100,
+		"maxUnauthenticatedPerIp": 10,
+		"loginTimeout": 20,
+		"minerTimeout": 900,
+		"diffMemoryMinutes": 15,
+		"banning": {
+			"enabled": true,
+			"time": 600,
+			"invalidPercent": 50,
+			"checkThreshold": 30
+		}
+	},
+
+	"daemon": {
+		"host": "127.0.0.1",
+		"port": 8545,
+		"timeout": 10000
+	},
+
+	"hasher": {
+		"path": "hasher/xcb_randomy",
+		"threads": 2
+	},
+
+	"redis": {
+		"host": "127.0.0.1",
+		"port": 6379,
+		"auth": "",
+		"db": 0
+	},
+
+	"blockUnlocker": {
+		"enabled": true,
+		"depth": 20,
+		"interval": 30,
+		"poolFee": 1,
+		"donations": {}
+	},
+
+	"payments": {
+		"enabled": true,
+		"dryRun": true,
+		"interval": 300,
+		"minPayment": "1000000000000000000",
+		"reserve": "0"
+	},
+
+	"api": {
+		"enabled": true,
+		"port": 8135,
+		"bindIp": "127.0.0.1"
+	}
+}

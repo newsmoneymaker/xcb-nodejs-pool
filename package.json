@@ -1,0 +1,24 @@
+{
+  "name": "xcb-nodejs-pool",
+  "version": "1.0.0",
+  "license": "GPL-2.0",
+  "author": "Core Blockchain (XCB) adaptation for xcb-nodejs-pool contributors (fork of cryptonote-nodejs-pool)",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/newsmoneymaker/xcb-nodejs-pool.git"
+  },
+  "dependencies": {
+    "async": "^1.5.2",
+    "cli-color": "^2.0.4",
+    "dateformat": "^4.5.1",
+    "redis": "3.1.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "description": "Core Blockchain (XCB) mining pool: RandomY (RandomX variant) via a geth-style cryptore_getWork/submitWork RPC, this pool's own invented eth-getwork-shaped stratum wire protocol",
+  "homepage": "https://github.com/newsmoneymaker/xcb-nodejs-pool",
+  "bugs": {
+    "url": "https://github.com/newsmoneymaker/xcb-nodejs-pool/issues"
+  }
+}
